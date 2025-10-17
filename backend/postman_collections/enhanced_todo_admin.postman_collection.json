@@ -1,0 +1,193 @@
+{
+	"info": {
+		"_postman_id": "5502c780-5fee-4990-b31e-61a49a86e841",
+		"name": "enhanced_todo_admin",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "48740438"
+	},
+	"item": [
+		{
+			"name": "list users",
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMyIsImFkbSI6dHJ1ZSwiZXhwIjoxNzYwMjgwNDc5fQ.qJ2pcvD180v6JRug7QclL6R5RnWtHVQ7SxQgo6004Gc",
+							"type": "string"
+						}
+					]
+				},
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://127.0.0.1:8000/admin/users",
+					"protocol": "http",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8000",
+					"path": [
+						"admin",
+						"users"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Update a user’s flags",
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI0IiwiYWRtIjpmYWxzZSwiZXhwIjoxNzYwMTY5ODQzfQ.9YDQkj-FZnAOXwDK9x-dvmQXEZRrnsON0L-83IeKUXk",
+							"type": "string"
+						}
+					]
+				},
+				"method": "PATCH",
+				"header": [],
+				"url": {
+					"raw": "http://127.0.0.1:8000/admin/users/2?make_admin=true&verify_email=true&deactivate=false",
+					"protocol": "http",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8000",
+					"path": [
+						"admin",
+						"users",
+						"2"
+					],
+					"query": [
+						{
+							"key": "make_admin",
+							"value": "true"
+						},
+						{
+							"key": "verify_email",
+							"value": "true"
+						},
+						{
+							"key": "deactivate",
+							"value": "false"
+						}
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "list all todos for all users",
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI0IiwiYWRtIjpmYWxzZSwiZXhwIjoxNzYwMTY5ODQzfQ.9YDQkj-FZnAOXwDK9x-dvmQXEZRrnsON0L-83IeKUXk",
+							"type": "string"
+						}
+					]
+				},
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://127.0.0.1:8000/admin/todos",
+					"protocol": "http",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8000",
+					"path": [
+						"admin",
+						"todos"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "delete users' todos",
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI0IiwiYWRtIjpmYWxzZSwiZXhwIjoxNzYwMTY5ODQzfQ.9YDQkj-FZnAOXwDK9x-dvmQXEZRrnsON0L-83IeKUXk",
+							"type": "string"
+						}
+					]
+				},
+				"method": "DELETE",
+				"header": [],
+				"url": {
+					"raw": "http://127.0.0.1:8000/admin/todos/1",
+					"protocol": "http",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8000",
+					"path": [
+						"admin",
+						"todos",
+						"1"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "list user's todos",
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI0IiwiYWRtIjp0cnVlLCJleHAiOjE3NjAxNzIzNjF9._SoMsLPuKJlN-U1KWoavYZLqjH65Gkvhgv1mZZucEtw",
+							"type": "string"
+						}
+					]
+				},
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://127.0.0.1:8000/admin/users/4/todos",
+					"protocol": "http",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8000",
+					"path": [
+						"admin",
+						"users",
+						"4",
+						"todos"
+					]
+				}
+			},
+			"response": []
+		}
+	]
+}
