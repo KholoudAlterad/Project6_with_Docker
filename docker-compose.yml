@@ -9,8 +9,8 @@ services:
       - .env
     volumes:
       - sqlite_data:/data
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
     restart: unless-stopped
 
   frontend:
@@ -20,7 +20,7 @@ services:
     depends_on:
       - backend
     ports:
-      - "3000:80"
+      - "80:80"
     restart: unless-stopped
 
 volumes:
