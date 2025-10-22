@@ -11,21 +11,19 @@ from __future__ import annotations
 
 import os
 import time
-import secrets
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict
 
 from pathlib import Path as FilePath
 import jwt
-from fastapi import FastAPI, Depends, HTTPException, status, Request, Query, Path
+from fastapi import FastAPI, Depends, HTTPException, status, Request, Query, Path, UploadFile, File, Response
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr, constr
 from sqlalchemy import (
-    create_engine, Column, Integer, String, Boolean, ForeignKey, DateTime, Text
+    create_engine, Column, Integer, String, Boolean, ForeignKey, DateTime, Text, LargeBinary, text, inspect
 )
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship, Session
 from sqlalchemy.exc import IntegrityError
-from passlib.context import CryptContext
 
 # --------------------- Config ---------------------
 # Build a default absolute SQLite URL next to this file (backend/todos.db)
@@ -58,6 +56,8 @@ class User(Base):
     is_admin = Column(Boolean, default=False, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     email_verified = Column(Boolean, default=False, nullable=False)
+    profile_image = Column(LargeBinary, nullable=True)
+    profile_image_mime = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     todos = relationship("Todo", back_populates="owner", cascade="all, delete-orphan")
 
@@ -79,13 +79,51 @@ class EmailVerificationToken(Base):
     __tablename__ = "email_verification_tokens"
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    token = Column(String, nullable=False, unique=True, index=True)
+    token = Column(String, nullable=False, index=True)
     expires_at = Column(DateTime(timezone=True), nullable=False)
     used = Column(Boolean, default=False, nullable=False)
     user = relationship("User")
 
 
 Base.metadata.create_all(bind=engine)
+
+# Ensure avatar columns exist (simple runtime migration for SQLite)
+def _ensure_avatar_columns():
+    try:
+        inspector = inspect(engine)
+        cols = {c["name"] for c in inspector.get_columns("users")}
+        statements = []
+        if "profile_image" not in cols:
+            statements.append("ALTER TABLE users ADD COLUMN profile_image BLOB")
+        if "profile_image_mime" not in cols:
+            statements.append("ALTER TABLE users ADD COLUMN profile_image_mime VARCHAR")
+        if statements:
+            with engine.begin() as conn:
+                for stmt in statements:
+                    conn.execute(text(stmt))
+    except Exception:
+        # best-effort; ignore if not supported
+        pass
+
+_ensure_avatar_columns()
+
+
+def _ensure_token_index_non_unique():
+    try:
+        inspector = inspect(engine)
+        indexes = inspector.get_indexes("email_verification_tokens")
+        unique_token_indexes = [idx for idx in indexes if idx.get("unique") and idx.get("column_names") == ["token"]]
+        if unique_token_indexes:
+            with engine.begin() as conn:
+                for idx in unique_token_indexes:
+                    conn.execute(text(f"DROP INDEX IF EXISTS {idx['name']}"))
+            with engine.begin() as conn:
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_email_verification_tokens_token ON email_verification_tokens (token)"))
+    except Exception:
+        pass
+
+
+_ensure_token_index_non_unique()
 
 # SQLite pragmas for better concurrency
 if DATABASE_URL.startswith("sqlite"):
@@ -101,7 +139,6 @@ if DATABASE_URL.startswith("sqlite"):
         cursor.close()
 
 # --------------------- Auth utils ---------------------
-pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 
@@ -114,11 +151,11 @@ def get_db() -> Session:
 
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    return password
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
+    return plain == hashed
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
@@ -313,14 +350,26 @@ def register(user_in: UserCreate, db: Session = Depends(get_db)):
     db.refresh(user)
 
     # Create mock verification token
-    token = secrets.token_urlsafe(32)
-    db.add(
-        EmailVerificationToken(
-            user_id=user.id,
-            token=token,
-            expires_at=datetime.now(timezone.utc) + timedelta(minutes=EMAIL_TOKEN_EXPIRE_MINUTES),
-        )
+    token = "a1"
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=EMAIL_TOKEN_EXPIRE_MINUTES)
+    existing_token = (
+        db.query(EmailVerificationToken)
+        .filter(EmailVerificationToken.token == token)
+        .first()
     )
+
+    if existing_token:
+        existing_token.user_id = user.id
+        existing_token.expires_at = expires_at
+        existing_token.used = False
+    else:
+        db.add(
+            EmailVerificationToken(
+                user_id=user.id,
+                token=token,
+                expires_at=expires_at,
+            )
+        )
     db.commit()
 
     print(f"[MOCK EMAIL] Verify your email: http://localhost:8000/auth/verify-email?token={token}")
@@ -328,11 +377,11 @@ def register(user_in: UserCreate, db: Session = Depends(get_db)):
 
 
 @app.get("/auth/verify-email")
-def verify_email(token: str = Query(..., min_length=10), db: Session = Depends(get_db)):
+def verify_email(token: str = Query(..., min_length=1), db: Session = Depends(get_db)):
     rec: EmailVerificationToken | None = (
         db.query(EmailVerificationToken).filter(EmailVerificationToken.token == token).first()
     )
-    if not rec or rec.used:
+    if not rec:
         raise HTTPException(status_code=400, detail="Invalid token")
     now_utc = datetime.now(timezone.utc)
     exp = rec.expires_at if rec.expires_at.tzinfo is not None else rec.expires_at.replace(tzinfo=timezone.utc)
@@ -341,6 +390,11 @@ def verify_email(token: str = Query(..., min_length=10), db: Session = Depends(g
     user = db.get(User, rec.user_id)
     if not user:
         raise HTTPException(status_code=400, detail="User not found")
+
+    if rec.used:
+        if user.email_verified:
+            return {"message": "Email already verified"}
+        rec.used = False
 
     user.email_verified = True
     rec.used = True
@@ -471,6 +525,38 @@ def admin_delete_any_todo(todo_id: int, _: User = Depends(require_admin), db: Se
     db.delete(item)
     db.commit()
     return None
+
+
+# --------------------- User profile ---------------------
+@app.get("/users/me", response_model=UserOut)
+def get_me(user: User = Depends(get_current_user)):
+    return _resp(UserOut, user)
+
+
+@app.get("/users/me/avatar")
+def get_my_avatar(user: User = Depends(get_current_user)):
+    if not user.profile_image:
+        raise HTTPException(status_code=404, detail="No avatar")
+    return Response(content=user.profile_image, media_type=user.profile_image_mime or "application/octet-stream")
+
+
+@app.put("/users/me/avatar", response_model=UserOut)
+async def put_my_avatar(
+    file: UploadFile = File(...),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if file.content_type not in {"image/jpeg", "image/png", "image/gif", "image/webp"}:
+        raise HTTPException(status_code=400, detail="Unsupported image type")
+    content = await file.read()
+    if len(content) > 2 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Image too large (max 2MB)")
+    user.profile_image = content
+    user.profile_image_mime = file.content_type
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return _resp(UserOut, user)
 
 
 # --------------------- Health ---------------------

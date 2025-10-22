@@ -123,11 +123,13 @@ Vite proxies `/api` to `http://127.0.0.1:8000` (FastAPI). Restart the dev server
 
 - `Login` – Authenticates the user, stores JWT, and routes to the dashboard. Unverified accounts trigger an automatic redirect to the verification screen.
 - `Register` – Creates accounts and immediately navigates to the verification page.
-- `VerifyEmail` – Accepts manual token entry or parses `?token=` from the URL. Locked-out logins redirect here.
+- `VerifyEmail` – Accepts manual token entry or parses `?token=` from the URL. Locked-out logins redirect here. the token is always (a1) for easy testing.
 - `MyTodos` – CRUD for the authenticated user’s todos. Requires verified email.
 - `AdminUsers` – Admin-only view with drawers to modify flags. User deletion is disabled in the UI.
 - `AdminTodos` – Admin overview with search, status filtering, and bulk deletion actions.
 - `Settings` – Theme management and placeholder for future preferences.
+
+
 
 ### Auth Handling
 
@@ -173,11 +175,11 @@ docker compose ps
 docker compose up -d
 
 # Then open
-Frontend: http://localhost:3000
+Frontend: http://localhost:80
 Backend docs: http://localhost:8000/docs
 
 # To stop the containers
-docker compose down -v
+docker compose stop
 
 # To stop the containers (and delete the database volume):
 docker compose down -v
@@ -205,7 +207,7 @@ SELECT * FROM todos;
 SELECT * FROM email_verification_tokens;
 
 # Make a user admin
-UPDATE users SET is_admin = 1 WHERE email = 'admin@example.com';
+UPDATE users SET is_admin = 1 WHERE email = 'kholoud@example.com';
 
 # Exit SQLite and container, Inside SQLite:
 .exit

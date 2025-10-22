@@ -4,7 +4,7 @@ import { FlowerLogo } from "./icons/FlowerLogo";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
-import { Avatar, AvatarFallback } from "./ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 
 interface LayoutProps {
   children: ReactNode;
@@ -13,6 +13,7 @@ interface LayoutProps {
     role: "admin" | "user";
     isVerified: boolean;
   };
+  avatarUrl?: string | null;
   onNavigate?: (page: string) => void;
   currentPage?: string;
   onLogout?: () => void;
@@ -21,6 +22,7 @@ interface LayoutProps {
 export function Layout({
   children,
   currentUser,
+  avatarUrl,
   onNavigate = () => {},
   currentPage = "my-todos",
   onLogout = () => {},
@@ -87,9 +89,13 @@ export function Layout({
                 </Badge>
               </div>
               <Avatar>
-                <AvatarFallback className="bg-primary text-primary-foreground">
-                  {currentUser.email.charAt(0).toUpperCase()}
-                </AvatarFallback>
+                {avatarUrl ? (
+                  <AvatarImage src={avatarUrl} alt={currentUser.email} />
+                ) : (
+                  <AvatarFallback className="flex size-full items-center justify-center rounded-full bg-primary text-primary-foreground">
+                    {currentUser.email.charAt(0).toUpperCase()}
+                  </AvatarFallback>
+                )}
               </Avatar>
             </div>
           )}

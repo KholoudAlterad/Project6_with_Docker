@@ -217,6 +217,38 @@ export async function adminDeleteTodo(id: number): Promise<void> {
   }
 }
 
+// -------- User Profile --------
+export async function getMe(): Promise<UserOut> {
+  const res = await fetch(`${BASE}/users/me`, {
+    headers: { ...authHeaders() },
+  });
+  return handleJsonResponse<UserOut>(res);
+}
+
+export async function uploadAvatar(file: File): Promise<UserOut> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${BASE}/users/me/avatar`, {
+    method: "PUT",
+    headers: { ...authHeaders() },
+    body: form,
+  });
+  return handleJsonResponse<UserOut>(res);
+}
+
+export async function getMyAvatarBlob(): Promise<Blob> {
+  const res = await fetch(`${BASE}/users/me/avatar`, {
+    headers: { ...authHeaders() },
+  });
+  if (!res.ok) {
+    // 404 means no avatar yet
+    const err: any = new Error(res.statusText);
+    err.status = res.status;
+    throw err;
+  }
+  return await res.blob();
+}
+
 export function isLoggedIn(): boolean {
   const t = getToken();
   return !!t && !isTokenExpired(t);

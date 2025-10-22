@@ -1,5 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, type ChangeEvent } from "react";
 import { Toaster } from "./components/ui/sonner";
+import { Avatar, AvatarImage, AvatarFallback } from "./components/ui/avatar";
+import { Button } from "./components/ui/button";
 import { Layout } from "./components/Layout";
 import { Register } from "./components/screens/Register";
 import { Login } from "./components/screens/Login";
@@ -8,7 +10,7 @@ import { MyTodos } from "./components/screens/MyTodos";
 import { AdminUsers } from "./components/screens/AdminUsers";
 import { AdminTodos } from "./components/screens/AdminTodos";
 import { Settings } from "./components/screens/Settings";
-import { isLoggedIn, decodeJwt, getCurrentEmail, logout as apiLogout, getToken } from "./lib/api";
+import { isLoggedIn, decodeJwt, getCurrentEmail, logout as apiLogout, getToken, uploadAvatar, getMyAvatarBlob } from "./lib/api";
 import { SimpleUI } from "./components/screens/SimpleUI";
 
 /**
@@ -148,6 +150,10 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [theme, setTheme] = useState<"green" | "pink">("green");
   const [pendingVerificationEmail, setPendingVerificationEmail] = useState<string | null>(null);
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [avatarLoading, setAvatarLoading] = useState(false);
+  const [avatarError, setAvatarError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Load theme preference from localStorage
   useEffect(() => {
@@ -194,6 +200,60 @@ export default function App() {
   const handleThemeChange = (newTheme: "green" | "pink") => {
     setTheme(newTheme);
     localStorage.setItem("leaftasks-theme", newTheme);
+  };
+
+  const fetchAvatar = async () => {
+    if (!currentUser) return;
+    setAvatarLoading(true);
+    setAvatarError(null);
+    try {
+      const blob = await getMyAvatarBlob();
+      const url = URL.createObjectURL(blob);
+      if (avatarUrl) URL.revokeObjectURL(avatarUrl);
+      setAvatarUrl(url);
+    } catch (e: any) {
+      if (e?.status === 404) {
+        if (avatarUrl) URL.revokeObjectURL(avatarUrl);
+        setAvatarUrl(null);
+      } else {
+        setAvatarError(e?.message || "Failed to load avatar");
+      }
+    } finally {
+      setAvatarLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (currentUser) {
+      fetchAvatar();
+    }
+    // Cleanup object URL on unmount or user switch
+    return () => {
+      if (avatarUrl) URL.revokeObjectURL(avatarUrl);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser]);
+
+  const handleAvatarInputChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setAvatarLoading(true);
+    setAvatarError(null);
+    try {
+      await uploadAvatar(file);
+      await fetchAvatar();
+    } catch (e: any) {
+      setAvatarError(e?.message || "Upload failed");
+    } finally {
+      setAvatarLoading(false);
+      event.target.value = "";
+    }
+  };
+
+  const handleAvatarButtonClick = () => {
+    if (avatarLoading) return;
+    setAvatarError(null);
+    fileInputRef.current?.click();
   };
 
   const handleLogin = (email: string, role: "admin" | "user") => {
@@ -270,9 +330,41 @@ export default function App() {
         return <MyTodos />;
       case "profile":
         return (
-          <div className="max-w-2xl mx-auto">
-            <h1 className="text-text-900 mb-4">Profile</h1>
-            <div className="bg-surface p-6 rounded-xl border border-border">
+          <div className="max-w-2xl mx-auto space-y-4">
+            <h1 className="text-text-900">Profile</h1>
+            <div className="bg-surface p-4 rounded-xl border border-border">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-20 h-20 md:w-32 md:h-32 rounded-full border border-primary/50 p-1 md:p-2 flex items-center justify-center bg-white">
+                  <Avatar className="w-full h-full">
+                    {avatarUrl ? (
+                      <AvatarImage src={avatarUrl} alt="Profile" />
+                    ) : (
+                      <AvatarFallback className="bg-muted text-text-600 text-lg md:text-2xl">
+                        {currentUser.email.charAt(0).toUpperCase()}
+                      </AvatarFallback>
+                    )}
+                  </Avatar>
+                </div>
+                <div className="space-y-2">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={handleAvatarInputChange}
+                    className="hidden"
+                  />
+                  <Button
+                    onClick={handleAvatarButtonClick}
+                    disabled={avatarLoading}
+                    className="bg-primary hover:bg-primary-600"
+                  >
+                    {avatarLoading ? "Uploading..." : "Upload Avatar"}
+                  </Button>
+                  {avatarError && (
+                    <p className="text-sm text-destructive">{avatarError}</p>
+                  )}
+                </div>
+              </div>
               <div className="space-y-4">
                 <div>
                   <label className="text-sm text-text-600">Email</label>
@@ -315,6 +407,7 @@ export default function App() {
     <>
       <Layout
         currentUser={currentUser}
+        avatarUrl={avatarUrl}
         onNavigate={handleNavigate}
         currentPage={currentPage}
         onLogout={handleLogout}
