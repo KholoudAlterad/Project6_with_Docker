@@ -25,6 +25,13 @@ from sqlalchemy import (
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship, Session
 from sqlalchemy.exc import IntegrityError
 
+try:
+    import boto3
+    from botocore.exceptions import ClientError
+except Exception:
+    boto3 = None
+    ClientError = Exception
+
 # --------------------- Config ---------------------
 # Build a default absolute SQLite URL next to this file (backend/todos.db)
 _DEFAULT_DB_PATH = FilePath(__file__).with_name("todos.db").resolve()
@@ -35,6 +42,11 @@ SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key-change-me")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
 EMAIL_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
 ALGORITHM = "HS256"
+
+S3_BUCKET = os.getenv("S3_BUCKET", "").strip()
+S3_REGION = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or ""
+S3_PREFIX = os.getenv("S3_PREFIX", "avatars/")
+S3_ENDPOINT_URL = os.getenv("S3_ENDPOINT_URL", "")
 
 # --------------------- DB setup ---------------------
 engine = create_engine(
@@ -137,6 +149,18 @@ if DATABASE_URL.startswith("sqlite"):
         cursor.execute("PRAGMA synchronous=NORMAL")
         cursor.execute("PRAGMA busy_timeout=30000")  # ms
         cursor.close()
+
+def _s3():
+    if not S3_BUCKET or boto3 is None:
+        return None
+    try:
+        return boto3.client("s3", region_name=(S3_REGION or None), endpoint_url=(S3_ENDPOINT_URL or None))
+    except Exception as e:
+        print(f"[S3 client init failed] {e}")
+        return None
+
+def _avatar_key(user_id: int) -> str:
+    return f"{S3_PREFIX}{user_id}"
 
 # --------------------- Auth utils ---------------------
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
@@ -535,6 +559,15 @@ def get_me(user: User = Depends(get_current_user)):
 
 @app.get("/users/me/avatar")
 def get_my_avatar(user: User = Depends(get_current_user)):
+    s3 = _s3()
+    if s3:
+        try:
+            obj = s3.get_object(Bucket=S3_BUCKET, Key=_avatar_key(user.id))
+            body = obj["Body"].read()
+            ct = obj.get("ContentType") or (user.profile_image_mime or "application/octet-stream")
+            return Response(content=body, media_type=ct)
+        except Exception as e:
+            print(f"[S3 GET failed] {e}")
     if not user.profile_image:
         raise HTTPException(status_code=404, detail="No avatar")
     return Response(content=user.profile_image, media_type=user.profile_image_mime or "application/octet-stream")
@@ -551,6 +584,18 @@ async def put_my_avatar(
     content = await file.read()
     if len(content) > 2 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Image too large (max 2MB)")
+    s3 = _s3()
+    if s3:
+        try:
+            s3.put_object(Bucket=S3_BUCKET, Key=_avatar_key(user.id), Body=content, ContentType=file.content_type)
+            user.profile_image = None
+            user.profile_image_mime = file.content_type
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+            return _resp(UserOut, user)
+        except Exception as e:
+            print(f"[S3 PUT failed] {e}")
     user.profile_image = content
     user.profile_image_mime = file.content_type
     db.add(user)

@@ -16,7 +16,7 @@ COPY . /app
 # Install backend Python dependencies
 RUN pip install --upgrade pip \
   && pip install --no-cache-dir \
-       fastapi "uvicorn[standard]" sqlalchemy passlib pyjwt pydantic email-validator python-multipart
+       fastapi "uvicorn[standard]" sqlalchemy passlib pyjwt pydantic email-validator python-multipart boto3
 
 EXPOSE 8000
 

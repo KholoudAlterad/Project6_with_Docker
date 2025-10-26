@@ -6,7 +6,13 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     env_file:
-      - .env
+      - .env                  # optional; keep if you actually ship a .env in your bundle
+    environment:              # <-- pass EB env props into the container
+      AWS_REGION: ${AWS_REGION}
+      AWS_DEFAULT_REGION: ${AWS_REGION}
+      S3_BUCKET: ${S3_BUCKET}
+      S3_PREFIX: ${S3_PREFIX}
+      SECRET_KEY: ${SECRET_KEY}
     volumes:
       - sqlite_data:/data
     expose:
