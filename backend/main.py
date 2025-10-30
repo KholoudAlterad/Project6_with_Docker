@@ -10,7 +10,9 @@ Fixes:
 from __future__ import annotations
 
 import os
+import mimetypes
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict
 
@@ -47,6 +49,8 @@ S3_BUCKET = os.getenv("S3_BUCKET", "").strip()
 S3_REGION = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or ""
 S3_PREFIX = os.getenv("S3_PREFIX", "avatars/")
 S3_ENDPOINT_URL = os.getenv("S3_ENDPOINT_URL", "")
+SESSION_TABLE = os.getenv("SESSION_TABLE", "").strip()
+SESSION_TTL_SECONDS = int(os.getenv("SESSION_TTL_SECONDS", "3600"))
 
 # --------------------- DB setup ---------------------
 engine = create_engine(
@@ -159,11 +163,20 @@ def _s3():
         print(f"[S3 client init failed] {e}")
         return None
 
+def _ddb_table():
+    if not SESSION_TABLE or boto3 is None:
+        return None
+    try:
+        return boto3.resource("dynamodb", region_name=(S3_REGION or None)).Table(SESSION_TABLE)
+    except Exception as e:
+        print(f"[DDB client init failed] {e}")
+        return None
+
 def _avatar_key(user_id: int) -> str:
     return f"{S3_PREFIX}{user_id}"
 
 # --------------------- Auth utils ---------------------
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
 
 
 def get_db() -> Session:
@@ -310,8 +323,24 @@ def _resp_list(model, objs):
 
 
 # --------------------- Dependencies ---------------------
-def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
-    payload = decode_token(token)
+def get_current_user(request: Request, token: Optional[str] = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
+    t = _ddb_table()
+    if t:
+        sid = request.cookies.get("session_id")
+        if sid:
+            try:
+                resp = t.get_item(Key={"session_id": sid})
+                item = resp.get("Item")
+            except Exception:
+                item = None
+            if item and item.get("expires_at_epoch", 0) >= int(time.time()):
+                u = db.get(User, int(item.get("user_id", 0)))
+                if u and u.is_active:
+                    return u
+    if token:
+        payload = decode_token(token)
+    else:
+        raise HTTPException(status_code=401, detail="Missing credentials")
     uid = payload.get("sub")
     if uid is None:
         raise HTTPException(status_code=401, detail="Malformed token: missing subject")
@@ -427,7 +456,7 @@ def verify_email(token: str = Query(..., min_length=1), db: Session = Depends(ge
 
 
 @app.post("/auth/login", response_model=TokenOut)
-def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+def login(response: Response, form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     # NOTE: pass email in the 'username' field
     user: User | None = db.query(User).filter(User.email == form_data.username).first()
     if not user or not verify_password(form_data.password, user.hashed_password):
@@ -439,7 +468,28 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
 
     expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     token = create_access_token({"sub": str(user.id), "adm": user.is_admin}, expires)
+    t = _ddb_table()
+    if t and SESSION_TTL_SECONDS > 0:
+        try:
+            session_id = str(uuid.uuid4())
+            exp_epoch = int((datetime.now(timezone.utc) + timedelta(seconds=SESSION_TTL_SECONDS)).timestamp())
+            t.put_item(Item={"session_id": session_id, "user_id": str(user.id), "expires_at_epoch": exp_epoch})
+            response.set_cookie(key="session_id", value=session_id, max_age=SESSION_TTL_SECONDS, httponly=True, samesite="lax", secure=False, path="/")
+        except Exception:
+            pass
     return TokenOut(access_token=token, expires_in=int(expires.total_seconds()))
+
+@app.post("/auth/logout", status_code=204)
+def logout(request: Request, response: Response):
+    sid = request.cookies.get("session_id")
+    t = _ddb_table()
+    if sid and t:
+        try:
+            t.delete_item(Key={"session_id": sid})
+        except Exception:
+            pass
+    response.delete_cookie("session_id", path="/")
+    return None
 
 
 # --------------------- Todo routes (User-scoped) ---------------------
@@ -562,12 +612,18 @@ def get_my_avatar(user: User = Depends(get_current_user)):
     s3 = _s3()
     if s3:
         try:
-            obj = s3.get_object(Bucket=S3_BUCKET, Key=_avatar_key(user.id))
+            obj = s3.get_object(Bucket=S3_BUCKET, Key=_avatar_key(user.id) + "_processed")
             body = obj["Body"].read()
             ct = obj.get("ContentType") or (user.profile_image_mime or "application/octet-stream")
             return Response(content=body, media_type=ct)
-        except Exception as e:
-            print(f"[S3 GET failed] {e}")
+        except Exception:
+            try:
+                obj = s3.get_object(Bucket=S3_BUCKET, Key=_avatar_key(user.id))
+                body = obj["Body"].read()
+                ct = obj.get("ContentType") or (user.profile_image_mime or "application/octet-stream")
+                return Response(content=body, media_type=ct)
+            except Exception as e2:
+                print(f"[S3 GET failed] {e2}")
     if not user.profile_image:
         raise HTTPException(status_code=404, detail="No avatar")
     return Response(content=user.profile_image, media_type=user.profile_image_mime or "application/octet-stream")
@@ -579,7 +635,8 @@ async def put_my_avatar(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if file.content_type not in {"image/jpeg", "image/png", "image/gif", "image/webp"}:
+    mime = file.content_type or mimetypes.guess_type(file.filename or "")[0] or "application/octet-stream"
+    if mime not in {"image/jpeg", "image/png", "image/gif", "image/webp"}:
         raise HTTPException(status_code=400, detail="Unsupported image type")
     content = await file.read()
     if len(content) > 2 * 1024 * 1024:
@@ -587,9 +644,9 @@ async def put_my_avatar(
     s3 = _s3()
     if s3:
         try:
-            s3.put_object(Bucket=S3_BUCKET, Key=_avatar_key(user.id), Body=content, ContentType=file.content_type)
+            s3.put_object(Bucket=S3_BUCKET, Key=_avatar_key(user.id), Body=content, ContentType=mime)
             user.profile_image = None
-            user.profile_image_mime = file.content_type
+            user.profile_image_mime = mime
             db.add(user)
             db.commit()
             db.refresh(user)
@@ -597,7 +654,7 @@ async def put_my_avatar(
         except Exception as e:
             print(f"[S3 PUT failed] {e}")
     user.profile_image = content
-    user.profile_image_mime = file.content_type
+    user.profile_image_mime = mime
     db.add(user)
     db.commit()
     db.refresh(user)
