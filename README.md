@@ -10,6 +10,7 @@ Full-stack implementation of a multi-tenant task manager with segregated user/ad
   - Email registration with password hashing (`pbkdf2_sha256`).
   - Verification tokens stored server-side and printed as mock “emails”.
   - JWT-based login; tokens persisted in localStorage via the frontend helper.
+  - Optional DynamoDB-backed session cookie (HttpOnly) on login; backend prefers the cookie session over JWT when present.
   - Automatic redirect to the verification screen when login is attempted with an unverified account.
 
 - **User Experience**
@@ -24,7 +25,7 @@ Full-stack implementation of a multi-tenant task manager with segregated user/ad
   - User deletion is intentionally disabled in the UI (see Future Enhancements).
 
 - **Tech Stack**
-  - Backend: FastAPI, SQLAlchemy (SQLite), Passlib, PyJWT.
+  - Backend: FastAPI, SQLAlchemy (SQLite), Passlib, PyJWT, Boto3.
   - Frontend: React (Vite, SWC), TypeScript, Tailwind-inspired utility classes.
   - Tooling: Sonner toasts, Radix UI components, class-variance-authority.
 
@@ -74,20 +75,41 @@ venv\Scripts\Activate.ps1
 # If you have a requirements file, use it (adjust path if needed):
 # pip install -r backend/requirements.txt
 # Otherwise install dependencies manually:
-pip install fastapi uvicorn sqlalchemy passlib pyjwt pydantic email-validator python-multipart
+pip install fastapi uvicorn sqlalchemy passlib pyjwt pydantic email-validator python-multipart boto3
 
 python -m uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 ### Environment Variables
 
-`backend/main.py` honors several optional variables:
+Use the provided `.env_example` as a starting point:
 
-- `DATABASE_URL` (default: SQLite file next to `backend/main.py`, i.e. `backend/todos.db`)
-- `SECRET_KEY` (default development key in file)
-- `ACCESS_TOKEN_EXPIRE_MINUTES` (default: 60)
+```text
+cp .env_example .env
+```
 
-Tokens & verification data are stored in SQLite by default. To reset data during development, stop the server and delete `backend/todos.db` (and any `todos.db-wal`/`todos.db-shm` sidecar files).
+`backend/main.py` honors these variables:
+
+- `DATABASE_URL` – SQLAlchemy connection string. For Docker Compose: `sqlite:////data/todos.db`.
+- `SECRET_KEY` – JWT signing key (use a long random string).
+- `ACCESS_TOKEN_EXPIRE_MINUTES` – JWT lifetime in minutes (default: 60).
+- `AWS_REGION` – AWS region for S3 and DynamoDB clients (e.g., `us-east-1`).
+- `S3_BUCKET` – S3 bucket used for avatars.
+- `S3_PREFIX` – Key prefix for avatar objects (default: `avatars/`).
+- `S3_ENDPOINT_URL` – Optional custom S3 endpoint (e.g., LocalStack). Leave unset in AWS.
+- `SESSION_TABLE` – DynamoDB table name for sessions (e.g., `todo_sessions`).
+- `SESSION_TTL_SECONDS` – Session lifetime in seconds (e.g., `3600`).
+
+Tokens & verification data are stored in SQLite by default. If `SESSION_TABLE` is set, successful logins also set an HttpOnly `session_id` cookie and a session record is written to DynamoDB; the API will prefer this cookie-based session when present, falling back to the Bearer JWT otherwise.
+
+Note: In Elastic Beanstalk, configure these as environment properties in the EB console; the `.env` file is for local Docker Compose.
+
+#### DynamoDB Session Storage (AWS)
+
+- Create a DynamoDB table with partition key `session_id` (String).
+- Enable TTL on attribute `expires_at_epoch`.
+- Grant the EB instance profile IAM permissions: `dynamodb:GetItem`, `dynamodb:PutItem`, `dynamodb:DeleteItem`, `dynamodb:DescribeTable` on the table.
+- Set EB env vars: `AWS_REGION`, `SESSION_TABLE`, `SESSION_TTL_SECONDS` (and keep your existing S3 vars).
 
 ### Key Endpoints (excerpt)
 
@@ -138,6 +160,8 @@ Frontend uses `src/lib/api.ts`:
 - `register()` / `verifyEmail()` / `login()` / `logout()` manage session state.
 - Token helpers store & retrieve `access_token` and current email from `localStorage`.
 - `isLoggedIn()` validates token freshness via `exp` claim.
+
+- If DynamoDB sessions are enabled, call `POST /auth/logout` before clearing localStorage to remove the server-side session and clear the HttpOnly cookie.
 
 ---
 
