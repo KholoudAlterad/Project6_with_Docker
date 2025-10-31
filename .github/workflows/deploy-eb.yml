@@ -1,8 +1,8 @@
-name: Deploy to Elastic Beanstalk (master)
+name: Deploy to Elastic Beanstalk (Docker)
 
 on:
   push:
-    branches: [master]
+    branches: [master]     # adjust if you use main
   workflow_dispatch:
 
 permissions:
@@ -18,6 +18,8 @@ env:
   EB_APP_NAME: ${{ secrets.EB_APP_NAME }}
   EB_ENV_NAME: ${{ secrets.EB_ENV_NAME }}
   EB_S3_BUCKET: ${{ secrets.EB_S3_BUCKET }}
+  ECR_BACKEND: ${{ secrets.ECR_BACKEND }}     # e.g. 123456789012.dkr.ecr.us-east-1.amazonaws.com/project5-backend
+  ECR_FRONTEND: ${{ secrets.ECR_FRONTEND }}   # e.g. 123456789012.dkr.ecr.us-east-1.amazonaws.com/project5-frontend
 
 jobs:
   deploy:
@@ -25,65 +27,87 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 18
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - name: Build frontend
-        working-directory: frontend
-        run: |
-          npm ci
-          npm run build
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-      - name: Backend syntax check
-        working-directory: backend
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r ../requirements.txt
-          python -m compileall .
-
-      - name: Prepare bundle
-        run: |
-          mkdir -p bundle/backend bundle/frontend
-          cp -r backend/* bundle/backend/
-          BUILD_DIR="frontend/dist"
-          if [ ! -d "$BUILD_DIR" ]; then
-            BUILD_DIR="frontend/build"
-          fi
-          cp -r "$BUILD_DIR" bundle/frontend/dist
-          cp requirements.txt Procfile bundle/
-          cd bundle
-          zip -r ../bundle.zip . -x "**/__pycache__/**" "**/.git/**" "**/node_modules/**"
-          cd -
-
-      - name: Configure AWS (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+      # Configure AWS via OIDC
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Upload & create EB version
+      # Authenticate Docker to ECR
+      - name: Log in to ECR
         run: |
-          VERSION_LABEL="build-${GITHUB_SHA::7}"
-          S3_KEY="${{ env.EB_APP_NAME }}/${VERSION_LABEL}.zip"
-          echo "VERSION_LABEL=$VERSION_LABEL" >> $GITHUB_ENV
-          echo "S3_KEY=$S3_KEY" >> $GITHUB_ENV
-          aws s3 cp bundle.zip "s3://${{ env.EB_S3_BUCKET }}/${S3_KEY}"
-          aws elasticbeanstalk create-application-version \
-            --application-name "${{ env.EB_APP_NAME }}" \
-            --version-label "$VERSION_LABEL" \
-            --source-bundle S3Bucket="${{ env.EB_S3_BUCKET }}",S3Key="$S3_KEY"
+          aws ecr get-login-password --region $AWS_REGION \
+            | docker login --username AWS --password-stdin "${ECR_BACKEND%/*}"
+      
+      # Build backend image (reuse existing Dockerfile)
+      - name: Build backend image
+        run: |
+          docker build -t "$ECR_BACKEND:${GITHUB_SHA::7}" backend
+          docker tag "$ECR_BACKEND:${GITHUB_SHA::7}" "$ECR_BACKEND:latest"
+      
+      # Build frontend image (existing Dockerfile expects build to happen inside)
+      - name: Build frontend image
+        run: |
+          docker build -t "$ECR_FRONTEND:${GITHUB_SHA::7}" frontend
+          docker tag "$ECR_FRONTEND:${GITHUB_SHA::7}" "$ECR_FRONTEND:latest"
+      
+      # Push both images
+      - name: Push backend image
+        run: |
+          docker push "$ECR_BACKEND:${GITHUB_SHA::7}"
+          docker push "$ECR_BACKEND:latest"
 
-      - name: Deploy to EB
+      - name: Push frontend image
         run: |
+          docker push "$ECR_FRONTEND:${GITHUB_SHA::7}"
+          docker push "$ECR_FRONTEND:latest"
+
+      # Generate Dockerrun.aws.json referencing the new tags
+      - name: Generate Dockerrun
+        run: |
+          cat > Dockerrun.aws.json <<'JSON'
+          {
+            "AWSEBDockerrunVersion": 2,
+            "containerDefinitions": [
+              {
+                "name": "frontend",
+                "image": "${ECR_FRONTEND}:${GITHUB_SHA::7}",
+                "memory": 256,
+                "essential": true,
+                "portMappings": [
+                  { "hostPort": 80, "containerPort": 80 }
+                ]
+              },
+              {
+                "name": "backend",
+                "image": "${ECR_BACKEND}:${GITHUB_SHA::7}",
+                "memory": 512,
+                "essential": true,
+                "portMappings": [
+                  { "hostPort": 8000, "containerPort": 8000 }
+                ]
+              }
+            ]
+          }
+          JSON
+
+      # Package Dockerrun and any EB config (if needed)
+      - name: Prepare bundle
+        run: |
+          zip -r bundle.zip Dockerrun.aws.json .ebextensions -x "*.git*" || zip -r bundle.zip Dockerrun.aws.json
+
+      # Upload bundle and deploy as new EB application version
+      - name: Upload & deploy
+        run: |
+          VERSION="docker-${GITHUB_SHA::7}"
+          S3_KEY="${EB_APP_NAME}/${VERSION}.zip"
+          aws s3 cp bundle.zip "s3://${EB_S3_BUCKET}/${S3_KEY}"
+          aws elasticbeanstalk create-application-version \
+            --application-name "$EB_APP_NAME" \
+            --version-label "$VERSION" \
+            --source-bundle S3Bucket="$EB_S3_BUCKET",S3Key="$S3_KEY"
           aws elasticbeanstalk update-environment \
-            --environment-name "${{ env.EB_ENV_NAME }}" \
-            --version-label "${{ env.VERSION_LABEL }}"
+            --environment-name "$EB_ENV_NAME" \
+            --version-label "$VERSION"
           aws elasticbeanstalk wait environment-updated \
-            --environment-names "${{ env.EB_ENV_NAME }}"
-          echo "✅ Deployed ${VERSION_LABEL}"
+            --environment-names "$EB_ENV_NAME"
