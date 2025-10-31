@@ -47,7 +47,11 @@ jobs:
         run: |
           mkdir -p bundle/backend bundle/frontend
           cp -r backend/* bundle/backend/
-          cp -r frontend/dist bundle/frontend/dist
+          BUILD_DIR="frontend/dist"
+          if [ ! -d "$BUILD_DIR" ]; then
+            BUILD_DIR="frontend/build"
+          fi
+          cp -r "$BUILD_DIR" bundle/frontend/dist
           cp requirements.txt Procfile bundle/
           cd bundle
           zip -r ../bundle.zip . -x "**/__pycache__/**" "**/.git/**" "**/node_modules/**"
