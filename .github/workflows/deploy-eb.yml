@@ -65,17 +65,15 @@ jobs:
       # Generate Dockerrun and docker-compose bundle for EB Docker platform
       - name: Generate Dockerrun
         run: |
-          cat > Dockerrun.aws.json <<'JSON'
+          cat <<EOF > Dockerrun.aws.json
           {
-            "AWSEBDockerrunVersion": 3,
-            "containerDefinitions": []
+            "AWSEBDockerrunVersion": 3
           }
-          JSON
+          EOF
 
       - name: Generate docker-compose
         run: |
-          cat > docker-compose.yml <<'YML'
-          version: '3'
+          cat <<EOF > docker-compose.yml
           services:
             frontend:
               image: ${ECR_FRONTEND}:${GITHUB_SHA::7}
@@ -84,10 +82,8 @@ jobs:
               restart: always
             backend:
               image: ${ECR_BACKEND}:${GITHUB_SHA::7}
-              ports:
-                - "8000:8000"
               restart: always
-          YML
+          EOF
 
       # Package Dockerrun, compose file, and optional EB config
       - name: Prepare bundle
