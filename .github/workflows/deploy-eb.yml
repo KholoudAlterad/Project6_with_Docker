@@ -21,11 +21,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
-
       - name: Backend syntax check
         working-directory: backend
         run: |
@@ -35,8 +45,9 @@ jobs:
 
       - name: Prepare bundle
         run: |
-          mkdir -p bundle/backend
+          mkdir -p bundle/backend bundle/frontend
           cp -r backend/* bundle/backend/
+          cp -r frontend/dist bundle/frontend/dist
           cp requirements.txt Procfile bundle/
           cd bundle
           zip -r ../bundle.zip . -x "**/__pycache__/**" "**/.git/**" "**/node_modules/**"
