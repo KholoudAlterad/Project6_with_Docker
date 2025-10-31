@@ -1,0 +1,70 @@
+name: Deploy to Elastic Beanstalk (master)
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: eb-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  EB_APP_NAME: ${{ secrets.EB_APP_NAME }}
+  EB_ENV_NAME: ${{ secrets.EB_ENV_NAME }}
+  EB_S3_BUCKET: ${{ secrets.EB_S3_BUCKET }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Backend syntax check
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ../requirements.txt
+          python -m compileall .
+
+      - name: Prepare bundle
+        run: |
+          mkdir -p bundle/backend
+          cp -r backend/* bundle/backend/
+          cp requirements.txt Procfile bundle/
+          cd bundle
+          zip -r ../bundle.zip . -x "**/__pycache__/**" "**/.git/**" "**/node_modules/**"
+          cd -
+
+      - name: Configure AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Upload & create EB version
+        run: |
+          VERSION_LABEL="build-${GITHUB_SHA::7}"
+          S3_KEY="${{ env.EB_APP_NAME }}/${VERSION_LABEL}.zip"
+          echo "VERSION_LABEL=$VERSION_LABEL" >> $GITHUB_ENV
+          echo "S3_KEY=$S3_KEY" >> $GITHUB_ENV
+          aws s3 cp bundle.zip "s3://${{ env.EB_S3_BUCKET }}/${S3_KEY}"
+          aws elasticbeanstalk create-application-version \
+            --application-name "${{ env.EB_APP_NAME }}" \
+            --version-label "$VERSION_LABEL" \
+            --source-bundle S3Bucket="${{ env.EB_S3_BUCKET }}",S3Key="$S3_KEY"
+
+      - name: Deploy to EB
+        run: |
+          aws elasticbeanstalk update-environment \
+            --environment-name "${{ env.EB_ENV_NAME }}" \
+            --version-label "${{ env.VERSION_LABEL }}"
+          aws elasticbeanstalk wait environment-updated \
+            --environment-names "${{ env.EB_ENV_NAME }}"
+          echo "✅ Deployed ${VERSION_LABEL}"

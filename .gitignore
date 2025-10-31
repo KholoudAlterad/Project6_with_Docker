@@ -1,5 +1,9 @@
 __pycache__
 venv
-#.env
+.env
 __pycache__
 node_modules
+todos.db
+uploads
+backend/*.db
+bundle.zip
