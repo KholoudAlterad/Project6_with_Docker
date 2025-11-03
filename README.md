@@ -102,14 +102,14 @@ cp .env_example .env
 
 Tokens & verification data are stored in SQLite by default. If `SESSION_TABLE` is set, successful logins also set an HttpOnly `session_id` cookie and a session record is written to DynamoDB; the API will prefer this cookie-based session when present, falling back to the Bearer JWT otherwise.
 
-Note: In Elastic Beanstalk, configure these as environment properties in the EB console; the `.env` file is for local Docker Compose.
+Configure these variables in whatever runtime environment you use for production; the `.env` file is intended for local Docker Compose.
 
 #### DynamoDB Session Storage (AWS)
 
 - Create a DynamoDB table with partition key `session_id` (String).
 - Enable TTL on attribute `expires_at_epoch`.
-- Grant the EB instance profile IAM permissions: `dynamodb:GetItem`, `dynamodb:PutItem`, `dynamodb:DeleteItem`, `dynamodb:DescribeTable` on the table.
-- Set EB env vars: `AWS_REGION`, `SESSION_TABLE`, `SESSION_TTL_SECONDS` (and keep your existing S3 vars).
+- Ensure whichever compute environment hosts the backend (e.g., ECS task role, EC2 instance profile) has IAM permissions: `dynamodb:GetItem`, `dynamodb:PutItem`, `dynamodb:DeleteItem`, `dynamodb:DescribeTable` on the table.
+- Provide environment variables `AWS_REGION`, `SESSION_TABLE`, and `SESSION_TTL_SECONDS` to the backend.
 
 ### Key Endpoints (excerpt)
 
